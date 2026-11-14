@@ -7,3 +7,7 @@ android {
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
 }
+dependencies {
+    // WhatsApp's chat is a RecyclerView: rows are recycled while scrolling, like here.
+    implementation("androidx.recyclerview:recyclerview:1.3.2")
+}

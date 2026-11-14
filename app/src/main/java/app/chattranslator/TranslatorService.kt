@@ -12,6 +12,7 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.view.Display
 import android.view.Gravity
@@ -47,7 +48,19 @@ class TranslatorService : AccessibilityService() {
     private lateinit var clip: FrameLayout
     private lateinit var toggle: ImageView
     private lateinit var toggleParams: WindowManager.LayoutParams
+    /** All label views ever created (for clean-up), the ones in use by message, and spares. */
     private val labels = ArrayList<TranslationLabel>()
+    private var labelsByMessage = HashMap<String, TranslationLabel>()
+    private val spareLabels = ArrayList<TranslationLabel>()
+
+    /**
+     * Scrolling: translations vanish as soon as the chat moves and only come back once it has
+     * been still for [SCROLL_SETTLE_MS] *and* two scans in a row find every message in the same
+     * place. They never move along with the list.
+     */
+    private var lastScrollAt = 0L
+    private var hiddenForScroll = false
+    private var lastPositions: List<Int>? = null
 
     /** Bubble colours measured on screen, keyed by "is outgoing". Empty until measured. */
     private val bubbleColors = HashMap<Boolean, Int>()
@@ -108,12 +121,15 @@ class TranslatorService : AccessibilityService() {
         if (!attached) return
         when (event.eventType) {
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
-                // Hide right away so translations never trail behind a moving list.
-                clip.visibility = View.INVISIBLE
+                lastScrollAt = SystemClock.uptimeMillis()
+                Log.v(TAG, "Scroll event")
+                hideForScroll()
                 scheduleRefresh(SCROLL_SETTLE_MS)
             }
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> scheduleRefresh(0)
-            else -> scheduleRefresh(CONTENT_DEBOUNCE_MS)
+            // WhatsApp also reports content changes while scrolling; those must not cut the
+            // waiting time short, so never schedule earlier than the scroll settle time.
+            else -> scheduleRefresh(maxOf(CONTENT_DEBOUNCE_MS, scrollSettleRemaining()))
         }
     }
 
@@ -131,6 +147,18 @@ class TranslatorService : AccessibilityService() {
             attached = false
         }
         super.onDestroy()
+    }
+
+    private fun scrollSettleRemaining(): Long =
+        (lastScrollAt + SCROLL_SETTLE_MS - SystemClock.uptimeMillis()).coerceAtLeast(0)
+
+    private fun hideForScroll() {
+        if (hiddenForScroll) return
+        hiddenForScroll = true
+        lastPositions = null
+        clip.animate().cancel()
+        clip.alpha = 0f
+        Log.d(TAG, "Hidden for scroll")
     }
 
     private fun scheduleRefresh(delayMs: Long) {
@@ -162,21 +190,56 @@ class TranslatorService : AccessibilityService() {
             return
         }
 
+        if (hiddenForScroll) {
+            // Still scrolling (or only just stopped): wait.
+            val remaining = scrollSettleRemaining()
+            if (remaining > 0) {
+                scheduleRefresh(remaining)
+                return
+            }
+            // A fling can keep moving without reporting every step: only show once two scans in
+            // a row see every message in the same place.
+            val positions = screen.messages.flatMap { listOf(it.bounds.top, it.bounds.left) } + screen.area.top
+            if (positions != lastPositions) {
+                lastPositions = positions
+                scheduleRefresh(STILL_CHECK_MS)
+                return
+            }
+        }
+
         overlay.getLocationOnScreen(overlayOrigin)
         placeClip(screen.area)
-        var used = 0
+        val fadeInTogether = hiddenForScroll || clip.visibility != View.VISIBLE
+        val nowShown = HashMap<String, TranslationLabel>()
+        val seen = HashMap<String, Int>()
         for (message in screen.messages) {
             val result = engine.lookup(message.text)
             if (isCutOff(message, screen.area)) continue
-            if (result is TranslationResult.Done) {
-                val outgoing = message.bubble.centerX() > screen.area.centerX()
-                labelAt(used++).bind(message, screen.area, result, bubbleColors[outgoing])
-            }
+            if (result !is TranslationResult.Done) continue
+            // Same message keeps the same label, so redraws don't make it flicker.
+            val n = seen.merge(message.text, 1, Int::plus)!!
+            val key = message.text + "\u0000" + n
+            val label = labelsByMessage.remove(key) ?: spareLabels.removeLastOrNull() ?: newLabel()
+            val outgoing = message.bubble.centerX() > screen.area.centerX()
+            label.bind(message, screen.area, result, bubbleColors[outgoing], animate = !fadeInTogether)
+            nowShown[key] = label
         }
-        for (i in used until labels.size) labels[i].clear()
-        if (used > 0) sampleBubbleColors(screen)
-        Log.d(TAG, "Refresh: ${screen.messages.size} messages, $used translated, area=${screen.area}")
+        for (label in labelsByMessage.values) {
+            label.clear()
+            spareLabels += label
+        }
+        labelsByMessage = nowShown
+        if (nowShown.isNotEmpty()) sampleBubbleColors(screen)
+        Log.d(TAG, "Refresh: ${screen.messages.size} messages, ${nowShown.size} translated")
+
+        val wasHidden = clip.visibility != View.VISIBLE
         clip.visibility = View.VISIBLE
+        if (hiddenForScroll || (wasHidden && clip.alpha < 1f)) {
+            hiddenForScroll = false
+            clip.animate().cancel()
+            clip.animate().alpha(1f).setDuration(FADE_IN_MS).start()
+            Log.d(TAG, "Shown after scroll")
+        }
     }
 
     /**
@@ -341,6 +404,8 @@ class TranslatorService : AccessibilityService() {
         if (!attached) return
         labels.forEach { clip.removeView(it) }
         labels.clear()
+        labelsByMessage.clear()
+        spareLabels.clear()
         bubbleColors.clear()
         learnPanel.close()
         learnPanel = LearnPanel(this, windowManager, settings, speaker)
@@ -387,11 +452,10 @@ class TranslatorService : AccessibilityService() {
         })
     }
 
-    private fun labelAt(index: Int): TranslationLabel =
-        labels.getOrNull(index) ?: TranslationLabel(this).also {
-            labels += it
-            clip.addView(it, FrameLayout.LayoutParams(0, 0))
-        }
+    private fun newLabel(): TranslationLabel = TranslationLabel(this).also {
+        labels += it
+        clip.addView(it, FrameLayout.LayoutParams(0, 0))
+    }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
@@ -399,7 +463,10 @@ class TranslatorService : AccessibilityService() {
         const val TAG = "ChatTranslator"
         val WHATSAPP = setOf("com.whatsapp", "com.whatsapp.w4b")
         const val CONTENT_DEBOUNCE_MS = 120L
-        const val SCROLL_SETTLE_MS = 180L
+        /** How long the chat must be still before translations come back. */
+        const val SCROLL_SETTLE_MS = 450L
+        const val STILL_CHECK_MS = 100L
+        const val FADE_IN_MS = 200L
         const val WATCHDOG_MS = 700L
     }
 }

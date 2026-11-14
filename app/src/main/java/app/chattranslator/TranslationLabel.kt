@@ -51,7 +51,7 @@ class TranslationLabel(context: Context) : TextView(context) {
      * [bubbleColor] is the colour measured on screen, if known; otherwise WhatsApp's default
      * colours for the current light/dark theme are used.
      */
-    fun bind(message: ChatMessage, area: Rect, result: TranslationResult.Done, bubbleColor: Int?) {
+    fun bind(message: ChatMessage, area: Rect, result: TranslationResult.Done, bubbleColor: Int?, animate: Boolean = true) {
         val isOutgoing = message.bubble.centerX() > area.centerX()
         val fill = bubbleColor ?: if (isOutgoing) palette.outgoing else palette.incoming
         if (appliedFill != fill) {
@@ -88,8 +88,14 @@ class TranslationLabel(context: Context) : TextView(context) {
 
         if (visibility != View.VISIBLE || textChanged) {
             visibility = View.VISIBLE
-            alpha = 0f
-            animate().alpha(1f).setDuration(FADE_MS).start()
+            animate().cancel()
+            if (animate) {
+                // A translation that just finished: fade it in on its own.
+                alpha = 0f
+                animate().alpha(1f).setDuration(FADE_MS).start()
+            } else {
+                alpha = 1f // the whole layer is fading in together (e.g. after scrolling)
+            }
         }
     }
 
