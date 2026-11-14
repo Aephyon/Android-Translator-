@@ -19,8 +19,20 @@ Works with WhatsApp and WhatsApp Business. The service only receives events from
 4. Open a WhatsApp chat. Foreign-language messages are shown translated inside their own bubble, marked by
    a thin green bar and a small code for the original language (e.g. `ES`).
 
-The round green translate button at the side of the screen switches between translation and original
-(it turns white when showing originals). Drag it up or down to move it.
+### Learn what they said
+
+Tap the round green translate button at the side of the screen to open the **Learn** panel. It lists
+every foreign-language message on screen as a learning card:
+
+- the language (e.g. *Spanish*),
+- the original message in large type,
+- what it means in your language underneath,
+- a 🔊 button that reads the original aloud with a native voice (uses the phone's text-to-speech;
+  the voice for a language may download the first time).
+
+The panel also has the **Show translations in the chat** switch: turn it off to read the chat in the
+original languages and use the panel when you get stuck. The button turns white while it's off.
+Drag the button up or down to move it.
 
 Translations take the colour of the bubble they sit on, measured from the screen (Android 11+), so they
 blend in with light mode, dark mode and WhatsApp's own theme setting. Text shrinks slightly when a
@@ -52,8 +64,8 @@ adb shell am start -n com.whatsapp/.ChatActivity
 Add `--ez light true` to the last command to keep the chat light while the phone is in dark mode
 (simulates WhatsApp's own theme setting).
 
-Verified this way on Android 14: translation into English and Dutch, scrolling, the toggle button, hiding
-when leaving the chat, and colours in light mode, dark mode and mixed themes. Not yet verified against the
+Verified this way on Android 14: translation into English and Dutch, scrolling, hiding when leaving the
+chat, colours in light mode, dark mode and mixed themes, and the Learn panel (cards, read-aloud, chat switch). Not yet verified against the
 real WhatsApp app.
 
 ## Compatibility with WhatsApp
@@ -69,6 +81,8 @@ not be tested because it needs a registered phone number.
 | --- | --- |
 | `TranslatorService.kt` | Accessibility service; places the translations, toggle button, bubble-colour sampling |
 | `TranslationLabel.kt` | How a translation looks: bubble colour, accent bar, language code, text fitting |
+| `LearnPanel.kt` | The Learn sheet: original/meaning cards, read-aloud, chat on/off switch |
+| `Speaker.kt` | Reads originals aloud with the phone's text-to-speech |
 | `MessageScanner.kt` | Finds message bubbles (`message_text` / `caption` view ids, with a fallback heuristic) |
 | `TranslationEngine.kt` | ML Kit language identification + on-device translation, with a cache |
 | `MessageFilter.kt` | Skips timestamps, emoji-only messages, bare links |

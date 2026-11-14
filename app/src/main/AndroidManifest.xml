@@ -4,6 +4,13 @@
     <!-- Only used to download language packs; messages are translated on the phone. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Lets the app find the phone's text-to-speech engine (Android 11+ package visibility). -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"

@@ -20,6 +20,8 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.Toast
@@ -35,6 +37,11 @@ class TranslatorService : AccessibilityService() {
     private lateinit var windowManager: WindowManager
     private lateinit var settings: AppSettings
     private lateinit var engine: TranslationEngine
+    private lateinit var speaker: Speaker
+    private lateinit var learnPanel: LearnPanel
+
+    /** Foreign-language messages currently on screen, in order, for the Learn panel. */
+    private var learnItems: List<LearnItem> = emptyList()
 
     private lateinit var overlay: FrameLayout
     private lateinit var clip: FrameLayout
@@ -56,7 +63,7 @@ class TranslatorService : AccessibilityService() {
     private val watchdog = object : Runnable {
         override fun run() {
             if (!showing) return
-            if (rootInActiveWindow?.packageName?.toString() !in WHATSAPP) hide()
+            if (whatsAppRoot() == null) hide()
             else handler.postDelayed(this, WATCHDOG_MS)
         }
     }
@@ -92,6 +99,8 @@ class TranslatorService : AccessibilityService() {
             }
         }
         settings.prefs.registerOnSharedPreferenceChangeListener(prefsListener)
+        speaker = Speaker(this)
+        learnPanel = LearnPanel(this, windowManager, settings, speaker)
         createWindows()
     }
 
@@ -114,6 +123,8 @@ class TranslatorService : AccessibilityService() {
         handler.removeCallbacksAndMessages(null)
         if (::settings.isInitialized) settings.prefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
         if (::engine.isInitialized) engine.close()
+        if (::speaker.isInitialized) speaker.shutdown()
+        if (::learnPanel.isInitialized) learnPanel.close()
         if (attached) {
             windowManager.removeView(overlay)
             windowManager.removeView(toggle)
@@ -128,19 +139,25 @@ class TranslatorService : AccessibilityService() {
     }
 
     private fun refresh() {
-        val root = rootInActiveWindow
+        val root = whatsAppRoot()
         val pkg = root?.packageName?.toString()
         if (root == null || pkg !in WHATSAPP) {
             hide()
             return
         }
         show()
-        if (!settings.showTranslations) {
-            clip.visibility = View.GONE
-            return
-        }
         val screen = MessageScanner.scan(root, pkg!!)
         if (screen == null) {
+            clip.visibility = View.GONE
+            updateLearnItems(emptyList())
+            return
+        }
+        // Translate everything on screen (also when hidden in the chat) so the Learn panel has it.
+        val translated = screen.messages.mapNotNull { message ->
+            (engine.lookup(message.text) as? TranslationResult.Done)?.let { LearnItem(message.text, it) }
+        }
+        updateLearnItems(translated)
+        if (!settings.showTranslations) {
             clip.visibility = View.GONE
             return
         }
@@ -162,6 +179,26 @@ class TranslatorService : AccessibilityService() {
         clip.visibility = View.VISIBLE
     }
 
+    /**
+     * WhatsApp's window if the user is in WhatsApp. Touching our own panel or button makes *our*
+     * window the active one, so then look for WhatsApp underneath instead of assuming they left.
+     */
+    private fun whatsAppRoot(): AccessibilityNodeInfo? {
+        val active = rootInActiveWindow
+        val pkg = active?.packageName?.toString()
+        if (pkg in WHATSAPP) return active
+        if (pkg != packageName) return null
+        return windows.asSequence()
+            .filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+            .mapNotNull { it.root }
+            .firstOrNull { it.packageName?.toString() in WHATSAPP }
+    }
+
+    private fun updateLearnItems(items: List<LearnItem>) {
+        learnItems = items
+        learnPanel.update(items)
+    }
+
     private fun show() {
         if (showing) return
         showing = true
@@ -176,6 +213,7 @@ class TranslatorService : AccessibilityService() {
         showing = false
         overlay.visibility = View.GONE
         toggle.visibility = View.GONE
+        learnPanel.close()
         handler.removeCallbacks(watchdog)
     }
 
@@ -207,7 +245,7 @@ class TranslatorService : AccessibilityService() {
             scaleType = ImageView.ScaleType.CENTER
             elevation = dp(6).toFloat()
             visibility = View.GONE
-            contentDescription = "Switch between translation and original"
+            contentDescription = "Open translations and learning panel"
         }
         val size = dp(42)
         toggleParams = WindowManager.LayoutParams(
@@ -228,7 +266,7 @@ class TranslatorService : AccessibilityService() {
         attached = true
     }
 
-    /** Tap to switch translation on/off, drag up or down to move the button out of the way. */
+    /** Tap to open the Learn panel, drag up or down to move the button out of the way. */
     @SuppressLint("ClickableViewAccessibility")
     private fun attachToggleTouch() {
         val slop = ViewConfiguration.get(this).scaledTouchSlop
@@ -255,7 +293,7 @@ class TranslatorService : AccessibilityService() {
                         settings.toggleY = toggleParams.y
                     } else {
                         view.performClick()
-                        settings.showTranslations = !settings.showTranslations
+                        learnPanel.open(learnItems)
                     }
                 }
             }
@@ -304,6 +342,8 @@ class TranslatorService : AccessibilityService() {
         labels.forEach { clip.removeView(it) }
         labels.clear()
         bubbleColors.clear()
+        learnPanel.close()
+        learnPanel = LearnPanel(this, windowManager, settings, speaker)
         scheduleRefresh(0)
     }
 

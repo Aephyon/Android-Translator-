@@ -163,14 +163,14 @@ class MainActivity : ComponentActivity() {
 
             Step("3. Use it") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Show translations", Modifier.weight(1f))
+                    Text("Show translations in the chat", Modifier.weight(1f))
                     Switch(checked = showTranslations, onCheckedChange = {
                         showTranslations = it
                         settings.showTranslations = it
                     })
                 }
-                Text("Open a WhatsApp chat. Messages in other languages get a pale box with the translation on top of the original, labelled with the original language (e.g. ES).")
-                Text("Tap the round 🌐 button at the side of the screen to switch between translation and original. Drag it up or down to move it.")
+                Text("Open a WhatsApp chat. Messages in other languages are shown in your language, right inside their bubble, marked with a thin green bar and the original language (e.g. ES).")
+                Text("Want to learn what they said? Tap the round green translate button at the side of the screen. The Learn panel shows each message in the original language with its meaning underneath, and 🔊 reads it aloud. Drag the button up or down to move it.")
                 Text("The first time someone writes in a new language, its language pack (about 30 MB) is downloaded first, so that first translation takes a moment.")
             }
         }
