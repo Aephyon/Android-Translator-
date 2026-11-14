@@ -56,6 +56,13 @@ Verified this way on Android 14: translation into English and Dutch, scrolling, 
 when leaving the chat, and colours in light mode, dark mode and mixed themes. Not yet verified against the
 real WhatsApp app.
 
+## Compatibility with WhatsApp
+
+Checked against the official WhatsApp APK, version 2.26.45.71 (November 2026): message text in chats is a
+`com.whatsapp.ui.coreui.base.TextEmojiLabel` with view id `message_text`, used across 35 chat-row layouts,
+and media captions use `caption`. Those are the ids `MessageScanner` looks for. A running WhatsApp could
+not be tested because it needs a registered phone number.
+
 ## How it works
 
 | File | Role |
