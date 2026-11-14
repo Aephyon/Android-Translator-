@@ -17,6 +17,7 @@ import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.text.style.RelativeSizeSpan
 import android.text.style.StyleSpan
+import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
@@ -153,6 +154,7 @@ class TranslatorService : AccessibilityService() {
             if (result is TranslationResult.Done) bindLabel(used++, message.bounds, screen.area, result)
         }
         for (i in used until labels.size) labels[i].visibility = View.GONE
+        Log.d(TAG, "Refresh: ${screen.messages.size} messages, $used translated, area=${screen.area}")
         clip.visibility = View.VISIBLE
     }
 
@@ -291,7 +293,8 @@ class TranslatorService : AccessibilityService() {
         label.translationY = top.toFloat()
 
         val minWidth = bounds.width() + 2 * pad
-        val maxWidth = maxOf(minWidth, area.width() - left - dp(4))
+        // Grow past the bubble only up to ~80% of the screen, like a real chat bubble.
+        val maxWidth = maxOf(minWidth, minOf(area.width() - left - dp(4), (area.width() * 0.8).toInt()))
         if (label.minWidth != minWidth) label.minWidth = minWidth
         if (label.minHeight != bounds.height() + 2 * pad) label.minHeight = bounds.height() + 2 * pad
         if (label.maxWidth != maxWidth) label.maxWidth = maxWidth
@@ -325,7 +328,7 @@ class TranslatorService : AccessibilityService() {
             gravity = Gravity.CENTER_VERTICAL
             background = GradientDrawable().apply {
                 cornerRadius = dp(6).toFloat()
-                setColor(if (dark) Color.parseColor("#F21E2A30") else Color.parseColor("#F7FFF8DC"))
+                setColor(if (dark) Color.parseColor("#FF1E2A30") else Color.parseColor("#FFFFF8DC"))
                 setStroke(dp(1), Color.parseColor("#661F8A70"))
             }
         }
@@ -334,6 +337,7 @@ class TranslatorService : AccessibilityService() {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     private companion object {
+        const val TAG = "ChatTranslator"
         val WHATSAPP = setOf("com.whatsapp", "com.whatsapp.w4b")
         const val CONTENT_DEBOUNCE_MS = 120L
         const val SCROLL_SETTLE_MS = 180L

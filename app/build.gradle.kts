@@ -16,7 +16,11 @@ android {
         versionName = "1.0.0"
 
         // Phones are ARM; dropping x86 builds of the ML Kit native libraries roughly halves the APK.
-        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+            // `-PwithX86` adds x86_64 for testing on an emulator.
+            if (project.hasProperty("withX86")) abiFilters += "x86_64"
+        }
     }
 
     buildTypes {

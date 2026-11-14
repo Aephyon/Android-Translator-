@@ -1,6 +1,7 @@
 package app.chattranslator
 
 import android.os.SystemClock
+import android.util.Log
 import com.google.mlkit.common.model.DownloadConditions
 import com.google.mlkit.common.model.RemoteModelManager
 import com.google.mlkit.nl.languageid.LanguageIdentification
@@ -77,6 +78,7 @@ class TranslationEngine(targetLanguage: String) {
             val result = try {
                 translate(text)
             } catch (e: Exception) {
+                Log.w(TAG, "Translation failed", e)
                 TranslationResult.Failed(SystemClock.elapsedRealtime())
             }
             if (startedIn != generation) return@launch // target language changed meanwhile
@@ -90,6 +92,7 @@ class TranslationEngine(targetLanguage: String) {
     private suspend fun translate(text: String): TranslationResult {
         val tag = identifier.identifyLanguage(text).await()
         val source = LanguageTags.toSupported(tag, AppSettings.supportedLanguages)
+        Log.d(TAG, "Detected '$tag' -> $source for ${text.take(40)}")
         if (source == null || source == target) return TranslationResult.NotNeeded
 
         val translator = translators.getOrPut(source) {
@@ -110,6 +113,7 @@ class TranslationEngine(targetLanguage: String) {
         }
         if (missing) onDownloadStarted?.invoke(source)
         translator.downloadModelIfNeeded(DownloadConditions.Builder().build()).await()
+        Log.i(TAG, "Language pack ready: $source -> $target")
         readyLanguages += source
     }
 
@@ -121,6 +125,7 @@ class TranslationEngine(targetLanguage: String) {
     }
 
     private companion object {
+        const val TAG = "ChatTranslator"
         const val MIN_CONFIDENCE = 0.5f
         const val CACHE_SIZE = 1000
         const val RETRY_AFTER_MS = 30_000L

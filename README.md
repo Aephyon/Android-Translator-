@@ -30,6 +30,23 @@ Requires JDK 17+ and the Android SDK (platform 35).
 # APK: app/build/outputs/apk/release/app-release.apk
 ```
 
+## Testing on an emulator
+
+`testing/fake-whatsapp` is a stand-in app with WhatsApp's package name and message view ids, showing a
+chat in Spanish, French, German and English. Build the translator with x86_64 libraries and install both:
+
+```sh
+./gradlew assembleRelease -PwithX86
+(cd testing && ./gradlew :fake-whatsapp:assembleDebug)
+adb install app/build/outputs/apk/release/app-release.apk
+adb install testing/fake-whatsapp/build/outputs/apk/debug/fake-whatsapp-debug.apk
+adb shell settings put secure enabled_accessibility_services app.chattranslator/app.chattranslator.TranslatorService
+adb shell am start -n com.whatsapp/.ChatActivity
+```
+
+Verified this way on Android 14: translation into English and Dutch, scrolling, the 🌐 toggle, and hiding
+when leaving the chat. Not yet verified against the real WhatsApp app.
+
 ## How it works
 
 | File | Role |
@@ -44,5 +61,5 @@ Requires JDK 17+ and the Android SDK (platform 35).
 
 - It relies on WhatsApp's screen layout. A WhatsApp update can break message detection; the fallback
   heuristic usually keeps it working, but may also translate things like contact names.
-- A translation longer than the original can overlap the next message slightly.
+- A translation longer than the original covers the bubble's timestamp and can overlap the next message slightly.
 - Very short messages ("ok", "jaja") are often not recognised as a language and stay untranslated.
