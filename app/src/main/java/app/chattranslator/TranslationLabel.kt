@@ -7,12 +7,8 @@ import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
 import android.text.Layout
-import android.text.SpannableStringBuilder
-import android.text.Spanned
 import android.text.StaticLayout
 import android.text.TextPaint
-import android.text.style.ForegroundColorSpan
-import android.text.style.RelativeSizeSpan
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
@@ -35,7 +31,6 @@ class TranslationLabel(context: Context) : TextView(context) {
     private val padV = dp(2)
 
     private var shown: TranslationResult.Done? = null
-    private var metaColor = palette.meta
     private var geometryKey: List<Int>? = null
 
     init {
@@ -59,8 +54,6 @@ class TranslationLabel(context: Context) : TextView(context) {
             background = makeBackground(fill)
             val darkBubble = luminance(fill) < 0.5
             setTextColor(if (darkBubble) Palette.DARK.text else Palette.LIGHT.text)
-            metaColor = if (darkBubble) Palette.DARK.meta else Palette.LIGHT.meta
-            shown = null // rebuild the text so the language code gets the new colour
         }
 
         val textChanged = shown != result
@@ -104,15 +97,8 @@ class TranslationLabel(context: Context) : TextView(context) {
         shown = null
     }
 
-    private fun buildText(result: TranslationResult.Done): CharSequence {
-        val tag = "  " + result.sourceLanguage.uppercase()
-        return SpannableStringBuilder(result.text).apply {
-            val start = length
-            append(tag)
-            setSpan(RelativeSizeSpan(0.72f), start, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            setSpan(ForegroundColorSpan(metaColor), start, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        }
-    }
+    /** Just the translation: the green bar marks it; the Learn panel names the language. */
+    private fun buildText(result: TranslationResult.Done): CharSequence = result.text
 
     private class Fit(val textSize: Float, val width: Int, val height: Int)
 

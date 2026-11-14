@@ -16,8 +16,8 @@ Works with WhatsApp and WhatsApp Business. The service only receives events from
 3. Tap **Open Accessibility settings** → **Chat Translator** → turn it on.
    - If it is greyed out or says *Restricted setting*: open App info for Chat Translator → ⋮ (top right) →
      **Allow restricted settings**, then try again. Android does this for every app installed from an APK.
-4. Open a WhatsApp chat. Foreign-language messages are shown translated inside their own bubble, marked by
-   a thin green bar and a small code for the original language (e.g. `ES`).
+4. Open a WhatsApp chat. Foreign-language messages are shown translated inside their own bubble, lined up
+   with the original text and marked by a thin green bar.
 
 ### Learn what they said
 
@@ -35,7 +35,9 @@ original languages and use the panel when you get stuck. The button turns white 
 Drag the button up or down to move it.
 
 While you scroll, translations disappear so nothing slides around; they fade back in once the chat
-has been still for about half a second.
+has been still for about half a second. From the moment a finger touches the screen the app checks
+message positions 25 times a second, so they vanish as soon as the chat starts moving (taps and typing
+don't move anything, so they leave translations alone).
 
 Translations take the colour of the bubble they sit on, measured from the screen (Android 11+), so they
 blend in with light mode, dark mode and WhatsApp's own theme setting. Text shrinks slightly when a

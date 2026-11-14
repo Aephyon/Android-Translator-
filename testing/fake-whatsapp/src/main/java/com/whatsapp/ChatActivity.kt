@@ -63,10 +63,12 @@ class ChatActivity : Activity() {
             }
             val bubble = LinearLayout(parent.context).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(24, 16, 24, 12)
+                setPadding(2, 16, 24, 12)
             }
             val text = TextView(parent.context).apply {
                 id = R.id.message_text
+                // WhatsApp's text view has invisible padding around the letters; mimic it.
+                setPadding(22, 0, 0, 0)
                 textSize = 15f
                 setTextColor(if (dark) Color.parseColor("#E9EDEF") else Color.BLACK)
             }

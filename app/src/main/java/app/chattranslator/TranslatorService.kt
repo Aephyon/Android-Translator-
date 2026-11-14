@@ -62,6 +62,38 @@ class TranslatorService : AccessibilityService() {
     private var hiddenForScroll = false
     private var lastPositions: List<Int>? = null
 
+    /**
+     * Motion watch: from the moment a finger touches the screen, check message positions every
+     * [MOTION_POLL_MS] and hide translations the instant anything moves. Taps and typing don't
+     * move the chat, so they leave translations alone. This doesn't rely on WhatsApp's scroll
+     * events, which arrive late and not always.
+     */
+    private var watchingUntil = 0L
+    private var watching = false
+    private var polledPositions: List<Int>? = null
+    private val motionPoll = object : Runnable {
+        override fun run() {
+            val now = SystemClock.uptimeMillis()
+            val root = whatsAppRoot()
+            val pkg = root?.packageName?.toString()
+            if (root != null && pkg != null) {
+                val positions = MessageScanner.positions(root, pkg)
+                val before = polledPositions
+                if (before != null && positions != before) {
+                    motionDetected("movement")
+                    watchingUntil = now + MOTION_WATCH_MS
+                }
+                polledPositions = positions
+            }
+            if (now < watchingUntil) {
+                handler.postDelayed(this, MOTION_POLL_MS)
+            } else {
+                watching = false
+                polledPositions = null
+            }
+        }
+    }
+
     /** Bubble colours measured on screen, keyed by "is outgoing". Empty until measured. */
     private val bubbleColors = HashMap<Boolean, Int>()
     private var sampling = false
@@ -121,15 +153,16 @@ class TranslatorService : AccessibilityService() {
         if (!attached) return
         when (event.eventType) {
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
-                lastScrollAt = SystemClock.uptimeMillis()
-                Log.v(TAG, "Scroll event")
-                hideForScroll()
-                scheduleRefresh(SCROLL_SETTLE_MS)
+                motionDetected("scroll event")
+                startMotionWatch()
             }
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> scheduleRefresh(0)
             // WhatsApp also reports content changes while scrolling; those must not cut the
             // waiting time short, so never schedule earlier than the scroll settle time.
-            else -> scheduleRefresh(maxOf(CONTENT_DEBOUNCE_MS, scrollSettleRemaining()))
+            else -> {
+                startMotionWatch()
+                scheduleRefresh(maxOf(CONTENT_DEBOUNCE_MS, scrollSettleRemaining()))
+            }
         }
     }
 
@@ -151,6 +184,21 @@ class TranslatorService : AccessibilityService() {
 
     private fun scrollSettleRemaining(): Long =
         (lastScrollAt + SCROLL_SETTLE_MS - SystemClock.uptimeMillis()).coerceAtLeast(0)
+
+    private fun motionDetected(reason: String) {
+        lastScrollAt = SystemClock.uptimeMillis()
+        if (!hiddenForScroll) Log.d(TAG, "Motion ($reason)")
+        hideForScroll()
+        scheduleRefresh(SCROLL_SETTLE_MS)
+    }
+
+    private fun startMotionWatch() {
+        watchingUntil = maxOf(watchingUntil, SystemClock.uptimeMillis() + MOTION_WATCH_MS)
+        if (watching) return
+        watching = true
+        polledPositions = null
+        handler.post(motionPoll)
+    }
 
     private fun hideForScroll() {
         if (hiddenForScroll) return
@@ -314,7 +362,10 @@ class TranslatorService : AccessibilityService() {
         toggleParams = WindowManager.LayoutParams(
             size, size,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            // WATCH_OUTSIDE_TOUCH: we hear about every touch elsewhere (no position, just "a
+            // finger went down"), which starts the motion watch.
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.END
@@ -338,6 +389,7 @@ class TranslatorService : AccessibilityService() {
         var dragging = false
         toggle.setOnTouchListener { view, event ->
             when (event.actionMasked) {
+                MotionEvent.ACTION_OUTSIDE -> if (showing) startMotionWatch()
                 MotionEvent.ACTION_DOWN -> {
                     downY = event.rawY
                     startY = toggleParams.y
@@ -394,8 +446,8 @@ class TranslatorService : AccessibilityService() {
      * messages, bigger than half the list, are translated anyway).
      */
     private fun isCutOff(message: ChatMessage, area: Rect): Boolean {
-        val touchesEdge = message.bounds.top <= area.top || message.bounds.bottom >= area.bottom
-        return touchesEdge && message.bounds.height() < area.height() / 2
+        val touchesEdge = message.view.top <= area.top || message.view.bottom >= area.bottom
+        return touchesEdge && message.view.height() < area.height() / 2
     }
 
     /** Light/dark mode changed: rebuild labels so they pick up the new colours. */
@@ -419,7 +471,7 @@ class TranslatorService : AccessibilityService() {
      */
     private fun sampleBubbleColors(screen: ChatScreen) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || sampling) return
-        val wanted = screen.messages.filter { it.bubble != it.bounds && !isCutOff(it, screen.area) }
+        val wanted = screen.messages.filter { it.bubble != it.view && !isCutOff(it, screen.area) }
             .groupBy { it.bubble.centerX() > screen.area.centerX() }
             .filterKeys { it !in bubbleColors }
         if (wanted.isEmpty()) return
@@ -466,6 +518,8 @@ class TranslatorService : AccessibilityService() {
         /** How long the chat must be still before translations come back. */
         const val SCROLL_SETTLE_MS = 450L
         const val STILL_CHECK_MS = 100L
+        const val MOTION_POLL_MS = 40L
+        const val MOTION_WATCH_MS = 1500L
         const val FADE_IN_MS = 200L
         const val WATCHDOG_MS = 700L
     }
