@@ -4,21 +4,16 @@ import android.accessibilityservice.AccessibilityService
 import android.annotation.SuppressLint
 import android.content.SharedPreferences
 import android.content.res.Configuration
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Rect
-import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.text.SpannableStringBuilder
-import android.text.Spanned
-import android.text.style.ForegroundColorSpan
-import android.text.style.RelativeSizeSpan
-import android.text.style.StyleSpan
 import android.util.Log
-import android.util.TypedValue
+import android.view.Display
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -26,7 +21,7 @@ import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.widget.FrameLayout
-import android.widget.TextView
+import android.widget.ImageView
 import android.widget.Toast
 import kotlin.math.abs
 
@@ -43,9 +38,13 @@ class TranslatorService : AccessibilityService() {
 
     private lateinit var overlay: FrameLayout
     private lateinit var clip: FrameLayout
-    private lateinit var toggle: TextView
+    private lateinit var toggle: ImageView
     private lateinit var toggleParams: WindowManager.LayoutParams
-    private val labels = ArrayList<TextView>()
+    private val labels = ArrayList<TranslationLabel>()
+
+    /** Bubble colours measured on screen, keyed by "is outgoing". Empty until measured. */
+    private val bubbleColors = HashMap<Boolean, Int>()
+    private var sampling = false
     private val overlayOrigin = IntArray(2)
     private var attached = false
     private var showing = false
@@ -151,9 +150,14 @@ class TranslatorService : AccessibilityService() {
         var used = 0
         for (message in screen.messages) {
             val result = engine.lookup(message.text)
-            if (result is TranslationResult.Done) bindLabel(used++, message.bounds, screen.area, result)
+            if (isCutOff(message, screen.area)) continue
+            if (result is TranslationResult.Done) {
+                val outgoing = message.bubble.centerX() > screen.area.centerX()
+                labelAt(used++).bind(message, screen.area, result, bubbleColors[outgoing])
+            }
         }
-        for (i in used until labels.size) labels[i].visibility = View.GONE
+        for (i in used until labels.size) labels[i].clear()
+        if (used > 0) sampleBubbleColors(screen)
         Log.d(TAG, "Refresh: ${screen.messages.size} messages, $used translated, area=${screen.area}")
         clip.visibility = View.VISIBLE
     }
@@ -161,6 +165,7 @@ class TranslatorService : AccessibilityService() {
     private fun show() {
         if (showing) return
         showing = true
+        bubbleColors.clear() // the user may have changed WhatsApp's theme meanwhile
         overlay.visibility = View.VISIBLE
         toggle.visibility = View.VISIBLE
         handler.postDelayed(watchdog, WATCHDOG_MS)
@@ -197,19 +202,14 @@ class TranslatorService : AccessibilityService() {
             }
         }
 
-        toggle = TextView(this).apply {
-            text = "🌐"
-            gravity = Gravity.CENTER
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#E61F8A70"))
-            }
-            elevation = dp(4).toFloat()
+        toggle = ImageView(this).apply {
+            setImageResource(R.drawable.ic_translate)
+            scaleType = ImageView.ScaleType.CENTER
+            elevation = dp(6).toFloat()
             visibility = View.GONE
             contentDescription = "Switch between translation and original"
         }
-        val size = dp(44)
+        val size = dp(42)
         toggleParams = WindowManager.LayoutParams(
             size, size,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
@@ -217,7 +217,7 @@ class TranslatorService : AccessibilityService() {
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.END
-            x = dp(6)
+            x = dp(8)
             y = settings.toggleY.takeIf { it >= 0 } ?: (resources.displayMetrics.heightPixels * 0.3).toInt()
         }
         attachToggleTouch()
@@ -263,8 +263,15 @@ class TranslatorService : AccessibilityService() {
         }
     }
 
+    /** On: green button with white icon. Off: white button with grey icon. */
     private fun updateToggleLook() {
-        toggle.alpha = if (settings.showTranslations) 1f else 0.45f
+        val on = settings.showTranslations
+        toggle.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(if (on) Color.parseColor("#00A884") else Color.WHITE)
+            if (!on) setStroke(dp(1), Color.parseColor("#33000000"))
+        }
+        toggle.setColorFilter(if (on) Color.WHITE else Color.parseColor("#8696A0"))
     }
 
     private fun placeClip(area: Rect) {
@@ -280,59 +287,71 @@ class TranslatorService : AccessibilityService() {
         }
     }
 
-    /** Covers the original message text with its translation. */
-    private fun bindLabel(index: Int, bounds: Rect, area: Rect, result: TranslationResult.Done) {
-        val label = labels.getOrNull(index) ?: newLabel().also {
-            labels += it
-            clip.addView(it, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT))
-        }
-        val pad = dp(LABEL_PADDING_DP)
-        val left = bounds.left - area.left - pad
-        val top = bounds.top - area.top - pad
-        label.translationX = left.toFloat()
-        label.translationY = top.toFloat()
-
-        val minWidth = bounds.width() + 2 * pad
-        // Grow past the bubble only up to ~80% of the screen, like a real chat bubble.
-        val maxWidth = maxOf(minWidth, minOf(area.width() - left - dp(4), (area.width() * 0.8).toInt()))
-        if (label.minWidth != minWidth) label.minWidth = minWidth
-        if (label.minHeight != bounds.height() + 2 * pad) label.minHeight = bounds.height() + 2 * pad
-        if (label.maxWidth != maxWidth) label.maxWidth = maxWidth
-
-        if (label.tag != result) {
-            label.tag = result
-            label.text = labelText(result)
-        }
-        label.visibility = View.VISIBLE
+    /**
+     * A message half off the top or bottom of the list only reports its visible part, so it
+     * can't be measured properly. It gets translated once it scrolls fully into view (very tall
+     * messages, bigger than half the list, are translated anyway).
+     */
+    private fun isCutOff(message: ChatMessage, area: Rect): Boolean {
+        val touchesEdge = message.bounds.top <= area.top || message.bounds.bottom >= area.bottom
+        return touchesEdge && message.bounds.height() < area.height() / 2
     }
 
-    private fun labelText(result: TranslationResult.Done): CharSequence {
-        val tagText = result.sourceLanguage.uppercase() + "  "
-        return SpannableStringBuilder(tagText).apply {
-            val span = Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-            setSpan(RelativeSizeSpan(0.7f), 0, tagText.length, span)
-            setSpan(StyleSpan(Typeface.BOLD), 0, tagText.length, span)
-            setSpan(ForegroundColorSpan(Color.parseColor("#FF1F8A70")), 0, tagText.length, span)
-            append(result.text)
-        }
+    /** Light/dark mode changed: rebuild labels so they pick up the new colours. */
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (!attached) return
+        labels.forEach { clip.removeView(it) }
+        labels.clear()
+        bubbleColors.clear()
+        scheduleRefresh(0)
     }
 
-    private fun newLabel(): TextView {
-        val dark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
-            Configuration.UI_MODE_NIGHT_YES
-        return TextView(this).apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-            setTextColor(if (dark) Color.parseColor("#FFECEFF1") else Color.parseColor("#FF111B21"))
-            val pad = dp(LABEL_PADDING_DP)
-            setPadding(pad, pad, pad, pad)
-            gravity = Gravity.CENTER_VERTICAL
-            background = GradientDrawable().apply {
-                cornerRadius = dp(6).toFloat()
-                setColor(if (dark) Color.parseColor("#FF1E2A30") else Color.parseColor("#FFFFF8DC"))
-                setStroke(dp(1), Color.parseColor("#661F8A70"))
+    /**
+     * WhatsApp has its own theme setting, so instead of guessing, read the bubble colours from a
+     * screenshot: one pixel just above each bubble's bottom edge, below the text and outside
+     * our labels. Android 11+ only; older phones use the default colours.
+     */
+    private fun sampleBubbleColors(screen: ChatScreen) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || sampling) return
+        val wanted = screen.messages.filter { it.bubble != it.bounds && !isCutOff(it, screen.area) }
+            .groupBy { it.bubble.centerX() > screen.area.centerX() }
+            .filterKeys { it !in bubbleColors }
+        if (wanted.isEmpty()) return
+        sampling = true
+        takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
+            override fun onSuccess(result: ScreenshotResult) {
+                sampling = false
+                val hardware = Bitmap.wrapHardwareBuffer(result.hardwareBuffer, result.colorSpace)
+                val bitmap = hardware?.copy(Bitmap.Config.ARGB_8888, false)
+                hardware?.recycle()
+                result.hardwareBuffer.close()
+                if (bitmap == null) return
+                for ((outgoing, messages) in wanted) {
+                    val bubble = messages.first().bubble
+                    val x = bubble.centerX()
+                    val y = bubble.bottom - dp(2)
+                    if (x in 0 until bitmap.width && y in 0 until bitmap.height) {
+                        bubbleColors[outgoing] = bitmap.getPixel(x, y) or 0xFF000000.toInt()
+                    }
+                }
+                bitmap.recycle()
+                Log.d(TAG, "Sampled bubble colours: ${bubbleColors.mapValues { Integer.toHexString(it.value) }}")
+                scheduleRefresh(0)
             }
-        }
+
+            override fun onFailure(errorCode: Int) {
+                sampling = false
+                Log.d(TAG, "Screenshot for colours failed: $errorCode")
+            }
+        })
     }
+
+    private fun labelAt(index: Int): TranslationLabel =
+        labels.getOrNull(index) ?: TranslationLabel(this).also {
+            labels += it
+            clip.addView(it, FrameLayout.LayoutParams(0, 0))
+        }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
@@ -342,6 +361,5 @@ class TranslatorService : AccessibilityService() {
         const val CONTENT_DEBOUNCE_MS = 120L
         const val SCROLL_SETTLE_MS = 180L
         const val WATCHDOG_MS = 700L
-        const val LABEL_PADDING_DP = 3
     }
 }

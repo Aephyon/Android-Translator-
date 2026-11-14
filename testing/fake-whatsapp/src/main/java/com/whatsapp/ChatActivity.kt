@@ -23,6 +23,9 @@ class ChatActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         title = "Familia"
+        val dark = (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES &&
+            !intent.getBooleanExtra("light", false) // like WhatsApp's own theme overriding the phone's
         val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 24, 24, 24) }
         for ((mine, text) in messages) {
             val bubble = LinearLayout(this).apply {
@@ -30,13 +33,20 @@ class ChatActivity : Activity() {
                 setPadding(24, 16, 24, 12)
                 background = GradientDrawable().apply {
                     cornerRadius = 24f
-                    setColor(if (mine) Color.parseColor("#D9FDD3") else Color.WHITE)
+                    setColor(
+                        when {
+                            dark && mine -> Color.parseColor("#005C4B")
+                            dark -> Color.parseColor("#202C33")
+                            mine -> Color.parseColor("#D9FDD3")
+                            else -> Color.WHITE
+                        }
+                    )
                 }
                 addView(TextView(context).apply {
                     id = R.id.message_text
                     this.text = text
                     textSize = 15f
-                    setTextColor(Color.BLACK)
+                    setTextColor(if (dark) Color.parseColor("#E9EDEF") else Color.BLACK)
                 })
                 addView(TextView(context).apply {
                     id = R.id.date
@@ -51,6 +61,6 @@ class ChatActivity : Activity() {
                 if (mine) leftMargin = 160 else rightMargin = 160
             })
         }
-        setContentView(ScrollView(this).apply { setBackgroundColor(Color.parseColor("#EFE7DE")); addView(column) })
+        setContentView(ScrollView(this).apply { setBackgroundColor(Color.parseColor(if (dark) "#0B141A" else "#EFE7DE")); addView(column) })
     }
 }
