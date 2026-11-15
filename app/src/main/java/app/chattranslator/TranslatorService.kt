@@ -264,10 +264,14 @@ class TranslatorService : AccessibilityService() {
         show()
         val screen = MessageScanner.scan(root, pkg!!)
         if (screen == null) {
+            // Not a conversation (e.g. the chats list): nothing to translate, no button.
             clip.visibility = View.GONE
+            toggle.visibility = View.GONE
+            learnPanel.close()
             updateLearnItems(emptyList())
             return
         }
+        toggle.visibility = View.VISIBLE
         engine.chatContext = screen.messages.map { it.text }
         // Translate everything on screen (also when hidden in the chat) so the Learn panel has it.
         val translated = screen.messages.mapNotNull { message ->
@@ -426,7 +430,6 @@ class TranslatorService : AccessibilityService() {
         listenForAppSwitches(true)
         bubbleColors.clear() // the user may have changed WhatsApp's theme meanwhile
         overlay.visibility = View.VISIBLE
-        toggle.visibility = View.VISIBLE
         handler.postDelayed(watchdog, WATCHDOG_MS)
     }
 

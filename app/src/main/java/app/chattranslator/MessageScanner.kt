@@ -21,6 +21,8 @@ data class ChatScreen(val area: Rect, val messages: List<ChatMessage>)
 object MessageScanner {
     /** View ids WhatsApp uses for message text and media captions. */
     private val MESSAGE_IDS = listOf("message_text", "caption")
+    /** WhatsApp's message box; only conversation screens have it. */
+    private val MESSAGE_BOX_IDS = listOf("entry", "conversation_entry_holder")
     private const val MAX_DEPTH = 40
     /** A bubble is the text plus a little padding; anything wider is not the bubble. */
     private const val MAX_BUBBLE_PADDING_PX = 400
@@ -49,6 +51,9 @@ object MessageScanner {
             val area = boundsOf(scrollableAncestor(nodes.first()) ?: root)
             return ChatScreen(area, nodes.mapNotNull { toMessage(it, area) })
         }
+        // Only conversations are translated, never lists (chats overview, updates, calls...).
+        // A conversation is recognised by its message box at the bottom.
+        if (!hasMessageBox(root, packageName)) return null
         // Fallback for when a WhatsApp update renames its views: take the text inside the
         // biggest scrolling list on screen, which is the conversation.
         val list = largestScrollable(root, 0) ?: return null
@@ -56,6 +61,26 @@ object MessageScanner {
         val area = boundsOf(list)
         collectTexts(list, area, messages, 0)
         return ChatScreen(area, messages)
+    }
+
+    /**
+     * True on a conversation screen: WhatsApp's message box (id "entry" / its holder), or, if
+     * WhatsApp renamed those, an editable field in the bottom part of the screen. The chats list
+     * only has a search field at the top.
+     */
+    private fun hasMessageBox(root: AccessibilityNodeInfo, packageName: String): Boolean {
+        if (MESSAGE_BOX_IDS.any { root.findAccessibilityNodeInfosByViewId("$packageName:id/$it").isNotEmpty() }) return true
+        val screen = boundsOf(root)
+        return hasEditableBelow(root, screen.top + (screen.height() * 0.6).toInt(), 0)
+    }
+
+    private fun hasEditableBelow(node: AccessibilityNodeInfo, y: Int, depth: Int): Boolean {
+        if (depth > MAX_DEPTH) return false
+        if (node.isEditable && node.isVisibleToUser && boundsOf(node).top >= y) return true
+        for (i in 0 until node.childCount) {
+            if (node.getChild(i)?.let { hasEditableBelow(it, y, depth + 1) } == true) return true
+        }
+        return false
     }
 
     private fun toMessage(node: AccessibilityNodeInfo, area: Rect): ChatMessage? {

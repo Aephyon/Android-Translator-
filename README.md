@@ -16,7 +16,8 @@ messages on screen, detects their language, and lays a translated copy over each
 Translation runs entirely on the phone with Google ML Kit (~59 languages). Messages are never sent anywhere; the
 internet is only used to download language packs (~30 MB each, once).
 
-Works with WhatsApp and WhatsApp Business. The service only receives events from those two apps.
+Only conversations are translated; lists such as the chats overview, Updates and Calls are left alone
+(and the translate button is hidden there). Works with WhatsApp and WhatsApp Business. The service only receives events from those two apps.
 
 ## Install
 
