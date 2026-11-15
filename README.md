@@ -2,6 +2,15 @@
 
 An Android app that shows WhatsApp messages in **any language** translated into **your chosen language**, right inside the chat.
 
+Two translation engines:
+
+- **On the phone** (default): Google ML Kit, private and offline, basic quality.
+- **Claude** (optional, your own Anthropic API key): much better translations of slang, nicknames and
+  references, because Claude sees the surrounding conversation and translates directly between the two
+  languages. Foreign-language messages (and the messages around them, for context) are sent to
+  Anthropic. If Claude can't be reached or rejects the key, the app falls back to on-phone translation.
+  Messages already in your language are never sent.
+
 It does not modify WhatsApp (so no risk of a ban). It runs next to it as an accessibility service: it reads the
 messages on screen, detects their language, and lays a translated copy over each foreign-language bubble.
 Translation runs entirely on the phone with Google ML Kit (~59 languages). Messages are never sent anywhere; the
@@ -52,6 +61,19 @@ Translations take the colour of the bubble they sit on, measured from the screen
 blend in with light mode, dark mode and WhatsApp's own theme setting. Text shrinks slightly when a
 translation is longer than the original, so it stays inside the bubble.
 
+### Claude translation
+
+In the app, under **Translation quality**, choose **Claude**, paste an API key from
+[console.anthropic.com](https://console.anthropic.com/settings/keys) and tap **Save & test**.
+
+- Model: `claude-haiku-5-5` (the cheapest Claude model) at low effort with thinking off.
+- Messages on screen are collected for 250 ms and translated in one request (up to 25 at a time), with up
+  to 30 other messages from the chat as context; answers come back as structured JSON.
+- Cost is billed to your Anthropic account: about $0.0001 per screen of new messages (a real two-message
+  request used 470 input + 95 output tokens, so roughly 10,000 screens per dollar; each message is
+  translated once and then cached). Replies typed in the Learn panel use Claude too.
+- The key is stored in the app's private storage, excluded from backups.
+
 ## Build
 
 Requires JDK 17+ and the Android SDK (platform 35).
@@ -101,7 +123,8 @@ not be tested because it needs a registered phone number.
 | `LearnPanel.kt` | The Learn sheet: original/meaning cards, read-aloud, chat on/off switch |
 | `Speaker.kt` | Reads originals aloud with the phone's text-to-speech |
 | `MessageScanner.kt` | Finds message bubbles (`message_text` / `caption` view ids, with a fallback heuristic) |
-| `TranslationEngine.kt` | ML Kit language identification + on-device translation, with a cache |
+| `TranslationEngine.kt` | Language identification, Claude batching with on-device fallback, cache |
+| `ClaudeTranslator.kt` | Claude requests (Anthropic Java SDK), prompts, JSON schema and parsing |
 | `MessageFilter.kt` | Skips timestamps, emoji-only messages, bare links |
 | `MainActivity.kt` | Setup screen: target language, permissions, on/off |
 

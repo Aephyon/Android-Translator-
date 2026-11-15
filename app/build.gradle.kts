@@ -12,8 +12,8 @@ android {
         applicationId = "app.chattranslator"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "1.4.0"
+        versionCode = 6
+        versionName = "1.5.0"
 
         // Phones are ARM; dropping x86 builds of the ML Kit native libraries roughly halves the APK.
         ndk {
@@ -36,6 +36,8 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // The Anthropic SDK uses java.util / java.time APIs beyond what minSdk 26 guarantees.
+        isCoreLibraryDesugaringEnabled = true
     }
 
     kotlinOptions {
@@ -44,6 +46,12 @@ android {
 
     buildFeatures {
         compose = true
+    }
+
+    packaging {
+        resources {
+            excludes += setOf("/META-INF/{AL2.0,LGPL2.1}", "META-INF/DEPENDENCIES", "META-INF/INDEX.LIST")
+        }
     }
 }
 
@@ -58,6 +66,11 @@ dependencies {
     implementation(libs.kotlinx.coroutines.play.services)
     implementation(libs.mlkit.translate)
     implementation(libs.mlkit.language.id)
+    implementation(libs.anthropic.java)
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
 
     testImplementation(libs.junit)
+    // Android's org.json is only a stub in local unit tests; use the real one there.
+    testImplementation("org.json:json:20240303")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }

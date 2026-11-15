@@ -24,6 +24,16 @@ class AppSettings(context: Context) {
         get() = prefs.getString(KEY_REPLY, null)
         set(value) = prefs.edit().putString(KEY_REPLY, value).apply()
 
+    /** Translate with Claude (needs [claudeApiKey]) instead of only on the phone. */
+    var useClaude: Boolean
+        get() = prefs.getBoolean(KEY_USE_CLAUDE, false)
+        set(value) = prefs.edit().putBoolean(KEY_USE_CLAUDE, value).apply()
+
+    /** The user's own Anthropic API key. Stored in this app's private storage (not backed up). */
+    var claudeApiKey: String?
+        get() = prefs.getString(KEY_CLAUDE_KEY, null)?.takeIf { it.isNotBlank() }
+        set(value) = prefs.edit().putString(KEY_CLAUDE_KEY, value?.trim()).apply()
+
     /** Vertical position of the floating toggle button, in pixels; -1 = not moved yet. */
     var toggleY: Int
         get() = prefs.getInt(KEY_TOGGLE_Y, -1)
@@ -37,8 +47,14 @@ class AppSettings(context: Context) {
         const val KEY_SHOW = "show_translations"
         const val KEY_TOGGLE_Y = "toggle_y"
         const val KEY_REPLY = "reply_language"
+        const val KEY_USE_CLAUDE = "use_claude"
+        const val KEY_CLAUDE_KEY = "claude_api_key"
 
         val supportedLanguages: Set<String> by lazy { TranslateLanguage.getAllLanguages().toSet() }
+
+        /** English language name for prompts ("nl" -> "Dutch"). */
+        fun englishName(code: String): String =
+            Locale.forLanguageTag(code).getDisplayName(Locale.ENGLISH).ifBlank { code }
 
         fun displayName(code: String): String =
             Locale.forLanguageTag(code).getDisplayName(Locale.getDefault())

@@ -127,6 +127,10 @@ class TranslatorService : AccessibilityService() {
                 announcedDownloads.clear()
                 scheduleRefresh(0)
             }
+            AppSettings.KEY_USE_CLAUDE, AppSettings.KEY_CLAUDE_KEY -> {
+                applyClaudeSetting()
+                scheduleRefresh(0)
+            }
             AppSettings.KEY_SHOW -> {
                 updateToggleLook()
                 scheduleRefresh(0)
@@ -149,6 +153,14 @@ class TranslatorService : AccessibilityService() {
                 }
             }
         }
+        engine.onClaudeKeyRejected = {
+            Toast.makeText(
+                this,
+                "Claude didn't accept your API key. Using on-phone translation; check the key in Chat Translator.",
+                Toast.LENGTH_LONG,
+            ).show()
+        }
+        applyClaudeSetting()
         settings.prefs.registerOnSharedPreferenceChangeListener(prefsListener)
         speaker = Speaker(this)
         learnPanel = newLearnPanel()
@@ -256,6 +268,7 @@ class TranslatorService : AccessibilityService() {
             updateLearnItems(emptyList())
             return
         }
+        engine.chatContext = screen.messages.map { it.text }
         // Translate everything on screen (also when hidden in the chat) so the Learn panel has it.
         val translated = screen.messages.mapNotNull { message ->
             (engine.lookup(message.text) as? TranslationResult.Done)?.let { LearnItem(message.text, it) }
@@ -333,6 +346,11 @@ class TranslatorService : AccessibilityService() {
             .filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
             .mapNotNull { it.root }
             .firstOrNull { it.packageName?.toString() in WHATSAPP }
+    }
+
+    private fun applyClaudeSetting() {
+        val key = settings.claudeApiKey
+        engine.claude = if (settings.useClaude && key != null) ClaudeTranslator(key) else null
     }
 
     private fun newLearnPanel() = LearnPanel(this, windowManager, settings, speaker, engine, ::insertIntoChat)

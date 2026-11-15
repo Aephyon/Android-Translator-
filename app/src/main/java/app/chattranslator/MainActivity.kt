@@ -27,7 +27,10 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
@@ -47,6 +50,8 @@ import com.google.mlkit.common.model.RemoteModelManager
 import com.google.mlkit.nl.translate.TranslateRemoteModel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 private enum class PackStatus { Checking, Ready, Missing, Downloading, Failed }
 
@@ -56,10 +61,16 @@ class MainActivity : ComponentActivity() {
     private var target by mutableStateOf("en")
     private var packStatus by mutableStateOf(PackStatus.Checking)
     private var showTranslations by mutableStateOf(true)
+    private var useClaude by mutableStateOf(false)
+    private var claudeKey by mutableStateOf("")
+    private var claudeTest by mutableStateOf<String?>(null)
+    private var claudeTesting by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         target = settings.targetLanguage
+        useClaude = settings.useClaude
+        claudeKey = settings.claudeApiKey.orEmpty()
         setContent {
             MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
                 Surface(Modifier.fillMaxSize()) { Screen() }
@@ -121,7 +132,7 @@ class MainActivity : ComponentActivity() {
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Text("Chat Translator", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-            Text("Shows WhatsApp messages in any language translated into your language, right inside the chat. Translation happens on your phone; your messages are never sent anywhere.")
+            Text("Shows WhatsApp messages in any language translated into your language, right inside the chat. By default, translation happens on your phone and your messages are never sent anywhere.")
 
             Step("1. Your language") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -143,7 +154,47 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            Step("2. Turn on the translator") {
+            Step("2. Translation quality") {
+                QualityOption(
+                    selected = !useClaude,
+                    title = "On this phone",
+                    detail = "Private and works offline. Basic quality.",
+                ) { chooseClaude(false) }
+                QualityOption(
+                    selected = useClaude,
+                    title = "Claude (Anthropic): best quality",
+                    detail = "Understands slang, nicknames and the rest of the conversation. Messages in other languages are sent to Anthropic to be translated.",
+                ) { chooseClaude(true) }
+                if (useClaude) {
+                    OutlinedTextField(
+                        value = claudeKey,
+                        onValueChange = { claudeKey = it.trim(); claudeTest = null },
+                        label = { Text("Your Anthropic API key") },
+                        placeholder = { Text("sk-ant-…") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        "Get a key at console.anthropic.com → API keys. Usage is billed to your Anthropic account: about $0.0001 per screen of new messages (roughly 10,000 screens per dollar).",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.clickable {
+                            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://console.anthropic.com/settings/keys")))
+                        },
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Button(enabled = claudeKey.isNotBlank() && !claudeTesting, onClick = ::saveAndTestClaude) {
+                            Text(if (claudeTesting) "Testing…" else "Save & test")
+                        }
+                    }
+                    claudeTest?.let { Text(it) }
+                    if (settings.claudeApiKey == null) {
+                        Text("Until a key is saved, translation stays on the phone.", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+
+            Step("3. Turn on the translator") {
                 if (serviceEnabled) {
                     Text("✓ Chat Translator is on", fontWeight = FontWeight.Bold)
                 } else {
@@ -161,7 +212,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            Step("3. Use it") {
+            Step("4. Use it") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Show translations in the chat", Modifier.weight(1f))
                     Switch(checked = showTranslations, onCheckedChange = {
@@ -169,7 +220,7 @@ class MainActivity : ComponentActivity() {
                         settings.showTranslations = it
                     })
                 }
-                Text("Open a WhatsApp chat. Messages in other languages are shown in your language, right inside their bubble, marked with a thin green bar and the original language (e.g. ES).")
+                Text("Open a WhatsApp chat. Messages in other languages are shown in your language, right inside their bubble, marked with a thin green bar. The Learn panel shows which language each one was in.")
                 Text("Want to learn what they said? Tap the round green translate button at the side of the screen. The Learn panel shows each message in the original language with its meaning underneath, and 🔊 reads it aloud. Drag the button up or down to move it.")
                 Text("Want to answer in their language? In the Learn panel, type your reply in your own language under \"Reply in\", check the translation, and tap Insert. It's put in WhatsApp's message box; you press send yourself.")
                 Text("The first time someone writes in a new language, its language pack (about 30 MB) is downloaded first, so that first translation takes a moment.")
@@ -177,6 +228,58 @@ class MainActivity : ComponentActivity() {
         }
 
         if (picking) LanguagePicker(onPick = { picking = false; selectLanguage(it) }, onDismiss = { picking = false })
+    }
+
+    private fun chooseClaude(value: Boolean) {
+        useClaude = value
+        settings.useClaude = value
+    }
+
+    /** Saves the key, then translates a sample message to check that it works. */
+    private fun saveAndTestClaude() {
+        val key = claudeKey.trim()
+        settings.claudeApiKey = key
+        claudeTesting = true
+        claudeTest = null
+        lifecycleScope.launch {
+            claudeTest = try {
+                val result = withContext(Dispatchers.IO) {
+                    val translator = ClaudeTranslator(key)
+                    try {
+                        translator.translateMessages(
+                            listOf(ClaudePrompt.Item(0, "¡Hola! ¿Vienes a cenar el domingo? 😊")),
+                            emptyList(),
+                            settings.targetLanguage,
+                        )
+                    } finally {
+                        translator.close()
+                    }
+                }
+                "✓ Works. \"¡Hola! ¿Vienes a cenar el domingo? 😊\" → \"${result.firstOrNull()?.translation}\""
+            } catch (e: ClaudeTranslator.KeyRejected) {
+                "✗ Anthropic didn't accept this key. Check that you copied all of it."
+            } catch (e: Exception) {
+                "✗ Couldn't reach Claude (${e.message ?: e.javaClass.simpleName}). Check your internet connection."
+            }
+            claudeTesting = false
+        }
+    }
+
+    @Composable
+    private fun QualityOption(selected: Boolean, title: String, detail: String, onClick: () -> Unit) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onClick)
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            RadioButton(selected = selected, onClick = onClick)
+            Column(Modifier.padding(top = 12.dp)) {
+                Text(title, fontWeight = FontWeight.Bold)
+                Text(detail, style = MaterialTheme.typography.bodySmall)
+            }
+        }
     }
 
     @Composable
