@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Chat Translator</string>
-    <string name="accessibility_description">Reads the messages on screen in WhatsApp (and WhatsApp Business) and shows them translated into your language. Only WhatsApp is read. Translation happens on your phone; messages are never sent anywhere.</string>
+    <string name="accessibility_description">Reads the messages on screen in WhatsApp (and WhatsApp Business) and shows them translated into your language. Only WhatsApp is read; while WhatsApp is open the app also notices when you switch to another app, so it can hide its translations right away. Translation happens on your phone; messages are never sent anywhere.</string>
 </resources>

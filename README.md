@@ -30,6 +30,13 @@ every foreign-language message on screen as a learning card:
 - a 🔊 button that reads the original aloud with a native voice (uses the phone's text-to-speech;
   the voice for a language may download the first time).
 
+### Reply in their language
+
+At the bottom of the Learn panel, **Reply in** (e.g. *Spanish*, picked automatically from the language
+used most in the chat; tap it to choose another) lets you type in your own language and see the
+translation as you type. **Insert** puts the translation in WhatsApp's message box, after anything you
+already typed there. Sending stays up to you.
+
 The panel also has the **Show translations in the chat** switch: turn it off to read the chat in the
 original languages and use the panel when you get stuck. The button turns white while it's off.
 Drag the button up or down to move it.
@@ -37,7 +44,9 @@ Drag the button up or down to move it.
 While you scroll, translations disappear so nothing slides around; they fade back in once the chat
 has been still for about half a second. From the moment a finger touches the screen the app checks
 message positions 25 times a second, so they vanish as soon as the chat starts moving (taps and typing
-don't move anything, so they leave translations alone).
+don't move anything, so they leave translations alone). Translations also disappear the moment you
+leave WhatsApp (Home, Back, switching apps): while WhatsApp is open the app is told when another app
+comes to the front, without reading anything from that app.
 
 Translations take the colour of the bubble they sit on, measured from the screen (Android 11+), so they
 blend in with light mode, dark mode and WhatsApp's own theme setting. Text shrinks slightly when a
@@ -72,7 +81,8 @@ Add `--ez light true` to the last command to keep the chat light while the phone
 
 Verified this way on Android 14: translation into English and Dutch, scrolling, hiding when leaving the
 chat, colours in light mode, dark mode and mixed themes, the Learn panel (cards, read-aloud, chat switch),
-and scrolling (slow drags, flings, back-to-back flings: translations only return after the list is still). Not yet verified against the
+scrolling (slow drags, flings, back-to-back flings: translations only return after the list is still),
+leaving with the Home button, and replying (typing, live translation, inserting into the message box). Not yet verified against the
 real WhatsApp app.
 
 ## Compatibility with WhatsApp

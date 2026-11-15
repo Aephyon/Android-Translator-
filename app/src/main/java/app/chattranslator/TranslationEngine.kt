@@ -117,7 +117,28 @@ class TranslationEngine(targetLanguage: String) {
         readyLanguages += source
     }
 
+    private val replyTranslators = HashMap<String, Translator>()
+
+    /**
+     * Translates text the user typed from [from] into [to] (for replies). Downloads the language
+     * packs on first use. Throws if translation isn't possible (e.g. no internet for a download).
+     */
+    suspend fun translateReply(text: String, from: String, to: String): String {
+        if (from == to) return text
+        val translator = replyTranslators.getOrPut("$from>$to") {
+            Translation.getClient(TranslatorOptions.Builder().setSourceLanguage(from).setTargetLanguage(to).build())
+        }
+        val missing = listOf(from, to).any {
+            !modelManager.isModelDownloaded(TranslateRemoteModel.Builder(it).build()).await()
+        }
+        if (missing) onDownloadStarted?.invoke(to)
+        translator.downloadModelIfNeeded(DownloadConditions.Builder().build()).await()
+        return translator.translate(text).await().trim()
+    }
+
     fun close() {
+        replyTranslators.values.forEach { it.close() }
+        replyTranslators.clear()
         scope.cancel()
         identifier.close()
         translators.values.forEach { it.close() }

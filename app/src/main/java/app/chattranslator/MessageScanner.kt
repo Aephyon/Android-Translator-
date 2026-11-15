@@ -63,7 +63,8 @@ object MessageScanner {
         val text = MessageFilter.clean(node.text) ?: return null
         val view = boundsOf(node)
         if (view.isEmpty) return null
-        val bounds = letterBounds(node)?.takeIf { view.contains(it) } ?: view
+        // Letters can poke out of the text view a little (e.g. "¿"); clip them to it.
+        val bounds = letterBounds(node)?.let { letters -> Rect(letters).takeIf { it.intersect(view) } } ?: view
         // The parent is normally the bubble. If it is much wider (e.g. the whole list), we don't
         // know the bubble, so the translation must stay inside the original text's own space.
         val bubble = node.parent?.let(::boundsOf)

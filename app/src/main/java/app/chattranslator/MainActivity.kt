@@ -171,6 +171,7 @@ class MainActivity : ComponentActivity() {
                 }
                 Text("Open a WhatsApp chat. Messages in other languages are shown in your language, right inside their bubble, marked with a thin green bar and the original language (e.g. ES).")
                 Text("Want to learn what they said? Tap the round green translate button at the side of the screen. The Learn panel shows each message in the original language with its meaning underneath, and 🔊 reads it aloud. Drag the button up or down to move it.")
+                Text("Want to answer in their language? In the Learn panel, type your reply in your own language under \"Reply in\", check the translation, and tap Insert. It's put in WhatsApp's message box; you press send yourself.")
                 Text("The first time someone writes in a new language, its language pack (about 30 MB) is downloaded first, so that first translation takes a moment.")
             }
         }

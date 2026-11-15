@@ -19,6 +19,11 @@ class AppSettings(context: Context) {
         get() = prefs.getBoolean(KEY_SHOW, true)
         set(value) = prefs.edit().putBoolean(KEY_SHOW, value).apply()
 
+    /** Language the user last replied in (Learn panel), or null if never. */
+    var replyLanguage: String?
+        get() = prefs.getString(KEY_REPLY, null)
+        set(value) = prefs.edit().putString(KEY_REPLY, value).apply()
+
     /** Vertical position of the floating toggle button, in pixels; -1 = not moved yet. */
     var toggleY: Int
         get() = prefs.getInt(KEY_TOGGLE_Y, -1)
@@ -31,6 +36,7 @@ class AppSettings(context: Context) {
         const val KEY_TARGET = "target_language"
         const val KEY_SHOW = "show_translations"
         const val KEY_TOGGLE_Y = "toggle_y"
+        const val KEY_REPLY = "reply_language"
 
         val supportedLanguages: Set<String> by lazy { TranslateLanguage.getAllLanguages().toSet() }
 

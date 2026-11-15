@@ -2,6 +2,7 @@ package app.chattranslator
 
 import android.accessibilityservice.AccessibilityService
 import android.annotation.SuppressLint
+import android.content.ComponentName
 import android.content.SharedPreferences
 import android.content.res.Configuration
 import android.graphics.Bitmap
@@ -10,9 +11,11 @@ import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.Settings
 import android.util.Log
 import android.view.Display
 import android.view.Gravity
@@ -76,7 +79,10 @@ class TranslatorService : AccessibilityService() {
             val now = SystemClock.uptimeMillis()
             val root = whatsAppRoot()
             val pkg = root?.packageName?.toString()
-            if (root != null && pkg != null) {
+            if (root == null || pkg == null) {
+                // Home / Back / app switch: the touch that started this watch left WhatsApp.
+                if (anotherAppInFront()) hide()
+            } else {
                 val positions = MessageScanner.positions(root, pkg)
                 val before = polledPositions
                 if (before != null && positions != before) {
@@ -108,8 +114,8 @@ class TranslatorService : AccessibilityService() {
     private val watchdog = object : Runnable {
         override fun run() {
             if (!showing) return
-            if (whatsAppRoot() == null) hide()
-            else handler.postDelayed(this, WATCHDOG_MS)
+            if (whatsAppRoot() == null) scheduleRefresh(0) // refresh decides: hide, or look again
+            handler.postDelayed(this, WATCHDOG_MS)
         }
     }
 
@@ -145,12 +151,28 @@ class TranslatorService : AccessibilityService() {
         }
         settings.prefs.registerOnSharedPreferenceChangeListener(prefsListener)
         speaker = Speaker(this)
-        learnPanel = LearnPanel(this, windowManager, settings, speaker)
+        learnPanel = newLearnPanel()
         createWindows()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         if (!attached) return
+        val pkg = event.packageName?.toString()
+        if (pkg !in WHATSAPP) {
+            // Only received while WhatsApp is open (see listenForAppSwitches); nothing from
+            // other apps is read. Another app coming to the front = the user left WhatsApp.
+            // Not the keyboard, and not Android's system UI (notification pop-ups, volume
+            // slider), which appear over WhatsApp without leaving it.
+            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+                pkg != null && pkg != packageName && pkg != SYSTEM_UI && pkg != keyboardPackage()
+            ) {
+                hide()
+                scheduleRefresh(RECHECK_AFTER_SWITCH_MS) // back if WhatsApp is in fact still in front
+            } else if (event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
+                scheduleRefresh(0)
+            }
+            return
+        }
         when (event.eventType) {
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
                 motionDetected("scroll event")
@@ -218,9 +240,15 @@ class TranslatorService : AccessibilityService() {
         val root = whatsAppRoot()
         val pkg = root?.packageName?.toString()
         if (root == null || pkg !in WHATSAPP) {
-            hide()
+            if (anotherAppInFront() || ++unknownFrontCount >= UNKNOWN_FRONT_LIMIT) {
+                unknownFrontCount = 0
+                hide()
+            } else {
+                scheduleRefresh(UNKNOWN_FRONT_RETRY_MS) // Android between windows; look again
+            }
             return
         }
+        unknownFrontCount = 0
         show()
         val screen = MessageScanner.scan(root, pkg!!)
         if (screen == null) {
@@ -298,21 +326,86 @@ class TranslatorService : AccessibilityService() {
         val active = rootInActiveWindow
         val pkg = active?.packageName?.toString()
         if (pkg in WHATSAPP) return active
-        if (pkg != packageName) return null
+        if (pkg != packageName && pkg != null) return null
+        // Our own panel/button is active, or Android has no active window for a moment (e.g.
+        // while our panel closes): look for WhatsApp's window instead.
         return windows.asSequence()
             .filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
             .mapNotNull { it.root }
             .firstOrNull { it.packageName?.toString() in WHATSAPP }
     }
 
+    private fun newLearnPanel() = LearnPanel(this, windowManager, settings, speaker, engine, ::insertIntoChat)
+
+    /**
+     * Puts [text] in WhatsApp's message box (after anything already typed there) and focuses
+     * it, so the user only has to press send. Returns false if the box can't be found.
+     */
+    private fun insertIntoChat(text: String): Boolean {
+        val root = whatsAppRoot() ?: return false
+        val pkg = root.packageName?.toString() ?: return false
+        val field = root.findAccessibilityNodeInfosByViewId("$pkg:id/entry").firstOrNull { it.isEditable }
+            ?: findEditable(root, 0)
+            ?: return false
+        val existing = if (field.isShowingHintText) "" else field.text?.toString().orEmpty()
+        val combined = if (existing.isBlank()) text else existing.trimEnd() + " " + text
+        val args = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, combined)
+        }
+        if (!field.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) return false
+        field.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+        field.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, Bundle().apply {
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, combined.length)
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, combined.length)
+        })
+        return true
+    }
+
+    /** Fallback if WhatsApp renames its message box: the lowest editable field on screen. */
+    private fun findEditable(node: AccessibilityNodeInfo, depth: Int): AccessibilityNodeInfo? {
+        if (depth > 40) return null
+        var best: AccessibilityNodeInfo? = if (node.isEditable && node.isVisibleToUser) node else null
+        for (i in 0 until node.childCount) {
+            val found = node.getChild(i)?.let { findEditable(it, depth + 1) } ?: continue
+            if (best == null || Rect().also(found::getBoundsInScreen).top > Rect().also(best::getBoundsInScreen).top) best = found
+        }
+        return best
+    }
+
+    /** True when Android reports a different app (not WhatsApp, not us) as the active one. */
+    private fun anotherAppInFront(): Boolean {
+        val pkg = rootInActiveWindow?.packageName?.toString() ?: return false
+        return pkg !in WHATSAPP && pkg != packageName
+    }
+
+    private var unknownFrontCount = 0
+
     private fun updateLearnItems(items: List<LearnItem>) {
         learnItems = items
         learnPanel.update(items)
     }
 
+    /**
+     * While WhatsApp is on screen, also hear when *another* app's window comes to the front, so
+     * translations can vanish the instant the user presses Home or switches apps. Otherwise
+     * (and by default, see accessibility_config.xml) only WhatsApp's events are received.
+     */
+    private fun listenForAppSwitches(enabled: Boolean) {
+        val info = serviceInfo ?: return
+        info.packageNames = if (enabled) null else WHATSAPP.toTypedArray()
+        info.eventTypes = BASE_EVENTS or if (enabled) AccessibilityEvent.TYPE_WINDOWS_CHANGED else 0
+        serviceInfo = info
+    }
+
+    /** The keyboard app: its window appearing doesn't mean the user left WhatsApp. */
+    private fun keyboardPackage(): String? =
+        Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
+            ?.let { ComponentName.unflattenFromString(it)?.packageName }
+
     private fun show() {
         if (showing) return
         showing = true
+        listenForAppSwitches(true)
         bubbleColors.clear() // the user may have changed WhatsApp's theme meanwhile
         overlay.visibility = View.VISIBLE
         toggle.visibility = View.VISIBLE
@@ -322,6 +415,8 @@ class TranslatorService : AccessibilityService() {
     private fun hide() {
         if (!showing) return
         showing = false
+        listenForAppSwitches(false)
+        Log.d(TAG, "Hidden: left WhatsApp")
         overlay.visibility = View.GONE
         toggle.visibility = View.GONE
         learnPanel.close()
@@ -460,7 +555,7 @@ class TranslatorService : AccessibilityService() {
         spareLabels.clear()
         bubbleColors.clear()
         learnPanel.close()
-        learnPanel = LearnPanel(this, windowManager, settings, speaker)
+        learnPanel = newLearnPanel()
         scheduleRefresh(0)
     }
 
@@ -514,6 +609,12 @@ class TranslatorService : AccessibilityService() {
     private companion object {
         const val TAG = "ChatTranslator"
         val WHATSAPP = setOf("com.whatsapp", "com.whatsapp.w4b")
+        const val SYSTEM_UI = "com.android.systemui"
+        const val RECHECK_AFTER_SWITCH_MS = 1000L
+        const val UNKNOWN_FRONT_RETRY_MS = 150L
+        const val UNKNOWN_FRONT_LIMIT = 4
+        const val BASE_EVENTS = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or AccessibilityEvent.TYPE_VIEW_SCROLLED
         const val CONTENT_DEBOUNCE_MS = 120L
         /** How long the chat must be still before translations come back. */
         const val SCROLL_SETTLE_MS = 450L
@@ -521,6 +622,6 @@ class TranslatorService : AccessibilityService() {
         const val MOTION_POLL_MS = 40L
         const val MOTION_WATCH_MS = 1500L
         const val FADE_IN_MS = 200L
-        const val WATCHDOG_MS = 700L
+        const val WATCHDOG_MS = 250L
     }
 }

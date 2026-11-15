@@ -47,7 +47,27 @@ class ChatActivity : Activity() {
             clipToPadding = false
             adapter = Adapter(dark)
         }
-        setContentView(list)
+        // Message box at the bottom, with WhatsApp's id for it ("entry").
+        val entry = android.widget.EditText(this).apply {
+            id = R.id.entry
+            hint = "Bericht"
+            setTextColor(if (dark) Color.parseColor("#E9EDEF") else Color.BLACK)
+            setHintTextColor(Color.parseColor("#8696A0"))
+            background = GradientDrawable().apply {
+                cornerRadius = 60f
+                setColor(Color.parseColor(if (dark) "#1F2C34" else "#FFFFFF"))
+            }
+            setPadding(40, 24, 40, 24)
+        }
+        val screen = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor(if (dark) "#0B141A" else "#EFE7DE"))
+            addView(list, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+            addView(entry, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                setMargins(16, 8, 16, 16)
+            })
+        }
+        setContentView(screen)
     }
 
     private inner class Holder(val row: LinearLayout, val bubble: LinearLayout, val text: TextView) :

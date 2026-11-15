@@ -15,7 +15,19 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.view.KeyEvent
+import android.view.WindowInsets
 import android.view.animation.DecelerateInterpolator
+import android.text.Editable
+import android.text.InputType
+import android.text.TextWatcher
+import android.widget.EditText
+import android.widget.PopupMenu
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -36,6 +48,9 @@ class LearnPanel(
     private val windowManager: WindowManager,
     private val settings: AppSettings,
     private val speaker: Speaker,
+    private val engine: TranslationEngine,
+    /** Puts the text in WhatsApp's message box; false if that box couldn't be found. */
+    private val insertIntoChat: (String) -> Boolean,
 ) {
     private val dark = (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
         Configuration.UI_MODE_NIGHT_YES
@@ -47,32 +62,61 @@ class LearnPanel(
     private val ui = if (dark) Colors.DARK else Colors.LIGHT
 
     private var root: FrameLayout? = null
-    private lateinit var sheet: LinearLayout
+    private lateinit var sheet: Sheet
     private lateinit var list: LinearLayout
     private lateinit var subtitle: TextView
     private lateinit var chatSwitch: Switch
     private var shownItems: List<LearnItem>? = null
 
+    // Reply composer
+    private val scope = MainScope()
+    private lateinit var replyInput: EditText
+    private lateinit var replyPreview: TextView
+    private lateinit var replyPreviewRow: View
+    private lateinit var replyChip: TextView
+    private lateinit var insertButton: TextView
+    private var replyLanguage: String = "en"
+    private var replyLanguageChosen = false
+    private var replyJob: Job? = null
+    private var replyTranslation: String? = null
+
+    /** The sheet never covers more than ~60% of the screen, or most of the space above the keyboard. */
+    private inner class Sheet(context: Context) : LinearLayout(context) {
+        var keyboardOpen = false
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val available = MeasureSpec.getSize(heightMeasureSpec)
+            val limit = if (keyboardOpen) (available * 0.94f).toInt()
+            else minOf(available, (resources.displayMetrics.heightPixels * 0.62f).toInt())
+            super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(limit, MeasureSpec.AT_MOST))
+        }
+    }
+
+    /** Full-screen dimmed backdrop; tapping it or pressing Back closes the panel. */
+    private inner class Scrim(context: Context) : FrameLayout(context) {
+        override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+            if (event.keyCode == KeyEvent.KEYCODE_BACK) {
+                if (event.action == KeyEvent.ACTION_UP) close()
+                return true
+            }
+            return super.dispatchKeyEvent(event)
+        }
+    }
+
     val isOpen get() = root != null
 
     fun open(items: List<LearnItem>) {
         if (isOpen) return
-        val scrim = FrameLayout(context).apply {
+        val scrim = Scrim(context).apply {
             setBackgroundColor(Color.parseColor("#66000000"))
             setOnClickListener { close() }
+            isFocusableInTouchMode = true
         }
         sheet = buildSheet()
-        val maxHeight = (context.resources.displayMetrics.heightPixels * 0.62).toInt()
         scrim.addView(sheet, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
-        sheet.layoutParams.height = ViewGroup.LayoutParams.WRAP_CONTENT
         (list.parent as ScrollView).layoutParams.height = ViewGroup.LayoutParams.WRAP_CONTENT
         sheet.viewTreeObserver.addOnPreDrawListener(object : android.view.ViewTreeObserver.OnPreDrawListener {
             override fun onPreDraw(): Boolean {
                 sheet.viewTreeObserver.removeOnPreDrawListener(this)
-                if (sheet.height > maxHeight) {
-                    sheet.layoutParams.height = maxHeight
-                    sheet.requestLayout()
-                }
                 sheet.translationY = sheet.height.toFloat()
                 sheet.animate().translationY(0f).setDuration(240).setInterpolator(DecelerateInterpolator()).start()
                 return true
@@ -85,22 +129,39 @@ class LearnPanel(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            // Focusable (unlike the other overlays) so the keyboard can type into the reply box.
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN or
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+                else WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
             }
         }
-        // Keep the last card clear of the navigation/gesture bar.
+        // Keep clear of the navigation bar, and sit on top of the keyboard while typing a reply.
         scrim.setOnApplyWindowInsetsListener { _, insets ->
-            @Suppress("DEPRECATION")
-            sheet.setPadding(0, dp(10), 0, dp(12) + insets.systemWindowInsetBottom)
+            val keyboard: Int
+            val navBar: Int
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                keyboard = insets.getInsets(WindowInsets.Type.ime()).bottom
+                navBar = insets.getInsets(WindowInsets.Type.navigationBars()).bottom
+            } else {
+                keyboard = 0
+                @Suppress("DEPRECATION")
+                navBar = insets.systemWindowInsetBottom
+            }
+            sheet.keyboardOpen = keyboard > 0
+            scrim.setPadding(0, 0, 0, keyboard)
+            sheet.setPadding(0, dp(10), 0, dp(8) + if (keyboard > 0) 0 else navBar)
+            sheet.requestLayout()
             insets
         }
         windowManager.addView(scrim, params)
         root = scrim
+        replyLanguageChosen = false
         update(items)
     }
 
@@ -108,6 +169,7 @@ class LearnPanel(
     fun update(items: List<LearnItem>) {
         if (!isOpen || items == shownItems) return
         shownItems = items
+        if (!replyLanguageChosen) setReplyLanguage(defaultReplyLanguage(items), chosen = false)
         chatSwitch.isChecked = settings.showTranslations
         list.removeAllViews()
         val languages = items.map { AppSettings.displayName(it.translation.sourceLanguage) }.distinct()
@@ -130,6 +192,7 @@ class LearnPanel(
         root = null
         shownItems = null
         speaker.stop()
+        replyJob?.cancel()
         sheet.animate().translationY(sheet.height.toFloat()).setDuration(180).start()
         view.animate().alpha(0f).setDuration(180).withEndAction {
             runCatching { windowManager.removeView(view) }
@@ -138,8 +201,8 @@ class LearnPanel(
 
     // ---- Views ---------------------------------------------------------------------------
 
-    private fun buildSheet(): LinearLayout {
-        val sheet = LinearLayout(context).apply {
+    private fun buildSheet(): Sheet {
+        val sheet = Sheet(context).apply {
             orientation = LinearLayout.VERTICAL
             isClickable = true // keep taps on the sheet from closing it via the scrim
             background = GradientDrawable().apply {
@@ -198,7 +261,172 @@ class LearnPanel(
         }
         val scroll = ScrollView(context).apply { isVerticalScrollBarEnabled = false; addView(list) }
         sheet.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        sheet.addView(buildComposer())
         return sheet
+    }
+
+    // ---- Reply composer ------------------------------------------------------------------
+
+    /**
+     * "Reply in Spanish": type in your own language, see the translation, and put it in
+     * WhatsApp's message box. Sending stays up to the user.
+     */
+    private fun buildComposer(): View {
+        val box = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(10), dp(16), dp(4))
+        }
+        box.addView(View(context).apply { setBackgroundColor(ui.handle) },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply { bottomMargin = dp(10) })
+
+        val header = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        header.addView(text("Reply in", 15f, ui.primary, bold = true))
+        replyChip = text("", 13f, ui.accentText, bold = true).apply {
+            background = GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(ui.accentSoft) }
+            setPadding(dp(10), dp(4), dp(10), dp(4))
+            contentDescription = "Choose the language to reply in"
+            setOnClickListener { pickReplyLanguage(this) }
+        }
+        header.addView(replyChip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { leftMargin = dp(8) })
+        box.addView(header)
+
+        val inputRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.BOTTOM
+        }
+        replyInput = EditText(context).apply {
+            hint = "Write in ${AppSettings.displayName(settings.targetLanguage)}…"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            setTextColor(ui.primary)
+            setHintTextColor(ui.secondary)
+            background = GradientDrawable().apply { cornerRadius = dp(22).toFloat(); setColor(ui.card) }
+            setPadding(dp(16), dp(10), dp(16), dp(10))
+            minHeight = dp(44)
+            maxLines = 4
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+                override fun afterTextChanged(s: Editable?) = translateReply()
+            })
+        }
+        inputRow.addView(replyInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        insertButton = text("Insert", 15f, Color.WHITE, bold = true).apply {
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply { cornerRadius = dp(22).toFloat(); setColor(ui.accent) }
+            setPadding(dp(18), 0, dp(18), 0)
+            minHeight = dp(44)
+            contentDescription = "Put the translation in WhatsApp's message box"
+            setOnClickListener { insertReply() }
+        }
+        inputRow.addView(insertButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)).apply { leftMargin = dp(8) })
+        box.addView(inputRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
+
+        // Live translation, styled like the cards: accent bar, then the text.
+        val previewRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            visibility = View.GONE
+            setPadding(dp(6), dp(10), dp(6), dp(2))
+        }
+        previewRow.addView(View(context).apply {
+            background = GradientDrawable().apply { cornerRadius = dp(2).toFloat(); setColor(ui.accent) }
+        }, LinearLayout.LayoutParams(dp(3), ViewGroup.LayoutParams.MATCH_PARENT).apply { rightMargin = dp(10) })
+        replyPreview = text("", 17f, ui.primary).apply {
+            setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
+            setLineSpacing(0f, 1.1f)
+        }
+        previewRow.addView(replyPreview)
+        replyPreviewRow = previewRow
+        box.addView(previewRow)
+
+        updateInsertButton()
+        return box
+    }
+
+    private fun defaultReplyLanguage(items: List<LearnItem>): String =
+        items.groupingBy { it.translation.sourceLanguage }.eachCount()
+            .filterKeys { it != settings.targetLanguage }
+            .maxByOrNull { it.value }?.key
+            ?: settings.replyLanguage?.takeIf { it != settings.targetLanguage }
+            ?: if (settings.targetLanguage == "en") "es" else "en"
+
+    private fun setReplyLanguage(language: String, chosen: Boolean) {
+        if (chosen) replyLanguageChosen = true
+        if (language == replyLanguage && replyChip.text.isNotEmpty()) return
+        replyLanguage = language
+        replyChip.text = AppSettings.displayName(language) + "  ▾"
+        translateReply()
+    }
+
+    /** Languages seen in this chat first, then all others alphabetically. */
+    private fun pickReplyLanguage(anchor: View) {
+        val seen = (shownItems ?: emptyList()).map { it.translation.sourceLanguage }
+            .filter { it != settings.targetLanguage }.distinct()
+        val others = AppSettings.supportedLanguages.filter { it !in seen && it != settings.targetLanguage }
+            .sortedBy { AppSettings.displayName(it) }
+        val choices = seen + others
+        val menu = PopupMenu(context, anchor)
+        choices.forEachIndexed { i, code -> menu.menu.add(0, i, i, AppSettings.displayName(code)) }
+        menu.setOnMenuItemClickListener { item ->
+            setReplyLanguage(choices[item.itemId], chosen = true)
+            true
+        }
+        menu.show()
+    }
+
+    private fun translateReply() {
+        if (!::replyInput.isInitialized) return
+        replyJob?.cancel()
+        replyTranslation = null
+        val typed = replyInput.text.toString().trim()
+        updateInsertButton()
+        if (typed.isEmpty()) {
+            replyPreviewRow.visibility = View.GONE
+            return
+        }
+        val from = settings.targetLanguage
+        val to = replyLanguage
+        replyJob = scope.launch {
+            delay(REPLY_DEBOUNCE_MS)
+            if (replyPreview.text.isEmpty()) showPreview("…", ui.secondary)
+            try {
+                val result = engine.translateReply(typed, from, to)
+                replyTranslation = result
+                showPreview(result, ui.primary)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showPreview("Couldn't translate. The ${AppSettings.displayName(to)} language pack needs internet the first time.", ui.secondary)
+            }
+            updateInsertButton()
+        }
+    }
+
+    private fun showPreview(value: String, color: Int) {
+        replyPreview.text = value
+        replyPreview.setTextColor(color)
+        replyPreviewRow.visibility = View.VISIBLE
+    }
+
+    private fun updateInsertButton() {
+        val ready = replyTranslation != null
+        insertButton.isEnabled = ready
+        insertButton.alpha = if (ready) 1f else 0.4f
+    }
+
+    private fun insertReply() {
+        val translation = replyTranslation ?: return
+        if (insertIntoChat(translation)) {
+            settings.replyLanguage = replyLanguage
+            replyInput.setText("")
+            close()
+        } else {
+            showPreview("Couldn't find WhatsApp's message box. Open the chat and try again.", ui.secondary)
+        }
     }
 
     /** Language chip + speak button, the original in large type, then the translation. */
@@ -270,6 +498,10 @@ class LearnPanel(
     }
 
     private fun dp(value: Int) = (value * density).toInt()
+
+    private companion object {
+        const val REPLY_DEBOUNCE_MS = 350L
+    }
 
     private class Colors(
         val sheet: Int, val card: Int, val primary: Int, val secondary: Int,
