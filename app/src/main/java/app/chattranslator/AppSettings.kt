@@ -24,6 +24,11 @@ class AppSettings(context: Context) {
         get() = prefs.getString(KEY_REPLY, null)
         set(value) = prefs.edit().putString(KEY_REPLY, value).apply()
 
+    /** Languages the user understands: messages in these are left untranslated. */
+    var excludedLanguages: Set<String>
+        get() = prefs.getStringSet(KEY_EXCLUDED, emptySet())!!.toSet()
+        set(value) = prefs.edit().putStringSet(KEY_EXCLUDED, value.toSet()).apply()
+
     /** Translate with Claude (needs [claudeApiKey]) instead of only on the phone. */
     var useClaude: Boolean
         get() = prefs.getBoolean(KEY_USE_CLAUDE, false)
@@ -48,6 +53,7 @@ class AppSettings(context: Context) {
         const val KEY_TOGGLE_Y = "toggle_y"
         const val KEY_REPLY = "reply_language"
         const val KEY_USE_CLAUDE = "use_claude"
+        const val KEY_EXCLUDED = "excluded_languages"
         const val KEY_CLAUDE_KEY = "claude_api_key"
 
         val supportedLanguages: Set<String> by lazy { TranslateLanguage.getAllLanguages().toSet() }

@@ -12,8 +12,8 @@ android {
         applicationId = "app.chattranslator"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "1.5.1"
+        versionCode = 8
+        versionName = "1.6.0"
 
         // Phones are ARM; dropping x86 builds of the ML Kit native libraries roughly halves the APK.
         ndk {

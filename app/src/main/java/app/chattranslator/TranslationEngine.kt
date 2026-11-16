@@ -74,6 +74,14 @@ class TranslationEngine(targetLanguage: String) {
         }
     private var claudeKeyReported = false
 
+    /** Languages the user understands; messages in them are not translated (nor sent to Claude). */
+    var excluded: Set<String> = emptySet()
+        set(value) {
+            if (field == value) return
+            field = value
+            resetCache()
+        }
+
     /** The messages currently on screen, oldest first: context for Claude. */
     var chatContext: List<String> = emptyList()
 
@@ -127,8 +135,9 @@ class TranslationEngine(targetLanguage: String) {
         val tag = identifier.identifyLanguage(text).await()
         val source = LanguageTags.toSupported(tag, AppSettings.supportedLanguages)
         Log.d(TAG, "Detected '$tag' -> $source for ${text.take(40)}")
-        // Clearly in the user's own language: nothing to do (and nothing to pay Claude for).
-        if (source == target) return TranslationResult.NotNeeded
+        // In the user's own language or one they understand: nothing to do (and nothing to pay
+        // Claude for).
+        if (source == target || source in excluded) return TranslationResult.NotNeeded
         if (claude != null) {
             try {
                 return viaClaude(text)
@@ -166,7 +175,7 @@ class TranslationEngine(targetLanguage: String) {
             }
         }
         val result = deferred.await() ?: return TranslationResult.NotNeeded
-        return if (ClaudePrompt.isUseful(text, result, target)) TranslationResult.Done(result.translation, result.language)
+        return if (ClaudePrompt.isUseful(text, result, target, excluded)) TranslationResult.Done(result.translation, result.language)
         else TranslationResult.NotNeeded
     }
 

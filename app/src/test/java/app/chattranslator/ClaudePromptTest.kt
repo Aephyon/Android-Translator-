@@ -44,6 +44,12 @@ class ClaudePromptTest {
         assertTrue(ClaudePrompt.isUseful("Hola", ClaudePrompt.Result(0, "es", "Hoi"), "nl"))
     }
 
+    @Test fun skipsLanguagesTheUserUnderstands() {
+        val english = ClaudePrompt.Result(0, "en", "Ziet er goed uit!")
+        assertFalse(ClaudePrompt.isUseful("Looks good!", english, "nl", setOf("en")))
+        assertTrue(ClaudePrompt.isUseful("Looks good!", english, "nl", setOf("fr")))
+    }
+
     @Test fun schemaRequiresEveryField() {
         @Suppress("UNCHECKED_CAST")
         val item = ((ClaudePrompt.MESSAGES_SCHEMA["properties"] as Map<String, Any>)["translations"] as Map<String, Any>)["items"] as Map<String, Any>

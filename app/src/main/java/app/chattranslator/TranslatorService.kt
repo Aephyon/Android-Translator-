@@ -127,6 +127,10 @@ class TranslatorService : AccessibilityService() {
                 announcedDownloads.clear()
                 scheduleRefresh(0)
             }
+            AppSettings.KEY_EXCLUDED -> {
+                engine.excluded = settings.excludedLanguages
+                scheduleRefresh(0)
+            }
             AppSettings.KEY_USE_CLAUDE, AppSettings.KEY_CLAUDE_KEY -> {
                 applyClaudeSetting()
                 scheduleRefresh(0)
@@ -161,6 +165,7 @@ class TranslatorService : AccessibilityService() {
             ).show()
         }
         applyClaudeSetting()
+        engine.excluded = settings.excludedLanguages
         settings.prefs.registerOnSharedPreferenceChangeListener(prefsListener)
         speaker = Speaker(this)
         learnPanel = newLearnPanel()

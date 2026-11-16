@@ -27,7 +27,11 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.InputChip
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -55,12 +59,14 @@ import kotlinx.coroutines.withContext
 
 private enum class PackStatus { Checking, Ready, Missing, Downloading, Failed }
 
+@OptIn(ExperimentalLayoutApi::class)
 class MainActivity : ComponentActivity() {
     private val settings by lazy { AppSettings(this) }
     private var serviceEnabled by mutableStateOf(false)
     private var target by mutableStateOf("en")
     private var packStatus by mutableStateOf(PackStatus.Checking)
     private var showTranslations by mutableStateOf(true)
+    private var excluded by mutableStateOf<Set<String>>(emptySet())
     private var useClaude by mutableStateOf(false)
     private var claudeKey by mutableStateOf("")
     private var claudeTest by mutableStateOf<String?>(null)
@@ -70,6 +76,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         target = settings.targetLanguage
         useClaude = settings.useClaude
+        excluded = settings.excludedLanguages
         claudeKey = settings.claudeApiKey.orEmpty()
         setContent {
             MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
@@ -124,6 +131,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun Screen() {
         var picking by remember { mutableStateOf(false) }
+        var pickingExcluded by remember { mutableStateOf(false) }
         Column(
             Modifier
                 .safeDrawingPadding()
@@ -151,6 +159,23 @@ class MainActivity : ComponentActivity() {
                         Text("Download failed. Check your internet connection.", Modifier.weight(1f))
                         Button(onClick = ::downloadPack) { Text("Retry") }
                     }
+                }
+
+                // Languages the user already understands.
+                Text("Don't translate", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
+                Text(
+                    "Messages in these languages are left as they are (and never sent to Claude).",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    for (code in excluded.sortedBy { AppSettings.displayName(it) }) {
+                        InputChip(
+                            selected = true,
+                            onClick = { saveExcluded(excluded - code) },
+                            label = { Text(AppSettings.displayName(code) + "  ✕") },
+                        )
+                    }
+                    OutlinedButton(onClick = { pickingExcluded = true }) { Text("+ Add language") }
                 }
             }
 
@@ -228,6 +253,43 @@ class MainActivity : ComponentActivity() {
         }
 
         if (picking) LanguagePicker(onPick = { picking = false; selectLanguage(it) }, onDismiss = { picking = false })
+        if (pickingExcluded) ExcludedPicker(onDone = { pickingExcluded = false; saveExcluded(it) }, onDismiss = { pickingExcluded = false })
+    }
+
+    private fun saveExcluded(languages: Set<String>) {
+        excluded = languages
+        settings.excludedLanguages = languages
+    }
+
+    /** All languages (except the user's own) with checkboxes; the ones ticked aren't translated. */
+    @Composable
+    private fun ExcludedPicker(onDone: (Set<String>) -> Unit, onDismiss: () -> Unit) {
+        var chosen by remember { mutableStateOf(excluded) }
+        val languages = remember(target) {
+            AppSettings.supportedLanguages.filter { it != target }
+                .map { it to AppSettings.displayName(it) }.sortedBy { it.second }
+        }
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("Don't translate") },
+            text = {
+                LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                    items(languages) { (code, name) ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { chosen = if (code in chosen) chosen - code else chosen + code },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(checked = code in chosen, onCheckedChange = null)
+                            Text(name, Modifier.padding(start = 8.dp))
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { onDone(chosen) }) { Text("Done") } },
+            dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        )
     }
 
     private fun chooseClaude(value: Boolean) {
